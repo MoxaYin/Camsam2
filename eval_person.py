@@ -257,31 +257,44 @@ def overlay_masks_on_frame(frame, masks, alpha=0.5):
     return overlayed
 
 
-def save_masks_as_images(masks_all_frames, output_dir, num_objects):
+def save_masks_as_images(masks_all_frames, output_dir, num_objects, frame_shape=None):
     """
-    保存所有帧的掩码为图像
+    保存所有帧的掩码为图像（所有行人合并到同一帧）
 
     参数:
         masks_all_frames: dict {frame_idx: {obj_id: mask}}
         output_dir: 输出目录
         num_objects: 对象数量
+        frame_shape: (height, width) 帧尺寸，用于初始化空掩码
     """
-    # 为每个对象创建目录
-    for obj_id in range(num_objects):
-        obj_dir = os.path.join(output_dir, f"person_{obj_id:03d}")
-        os.makedirs(obj_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
-    # 保存掩码
-    for frame_idx, frame_masks in masks_all_frames.items():
+    # 保存掩码 - 每帧一个图像，所有行人合并
+    for frame_idx, frame_masks in tqdm(masks_all_frames.items(), desc="保存掩码"):
+        # 获取帧尺寸
+        if frame_shape is None:
+            # 从第一个掩码获取尺寸
+            first_mask = next(iter(frame_masks.values()))
+            if first_mask.ndim == 3:
+                first_mask = first_mask[0]
+            h, w = first_mask.shape
+        else:
+            h, w = frame_shape
+
+        # 创建合并掩码 (所有行人合并到一起)
+        combined_mask = np.zeros((h, w), dtype=np.uint8)
+
         for obj_id, mask in frame_masks.items():
-            obj_dir = os.path.join(output_dir, f"person_{obj_id:03d}")
-            mask_path = os.path.join(obj_dir, f"{frame_idx:05d}.png")
-
-            # 转换为 uint8 (0 或 255)
+            # 确保掩码是 2D
             if mask.ndim == 3:
                 mask = mask[0]
-            mask_uint8 = (mask > 0).astype(np.uint8) * 255
-            cv2.imwrite(mask_path, mask_uint8)
+            # 合并掩码 (使用不同的像素值区分不同行人，或者简单合并)
+            # 这里使用简单合并：所有行人区域都是255
+            combined_mask[mask > 0] = 255
+
+        # 保存合并后的掩码
+        mask_path = os.path.join(output_dir, f"{frame_idx:05d}.png")
+        cv2.imwrite(mask_path, combined_mask)
 
 
 def create_output_video(frames_dir, masks_all_frames, output_path, fps, frame_size):
@@ -447,7 +460,8 @@ def segment_persons_in_video(
 
         if save_masks:
             masks_dir = os.path.join(output_path, "masks")
-            save_masks_as_images(masks_all_frames, masks_dir, len(detections))
+            save_masks_as_images(masks_all_frames, masks_dir, len(detections),
+                                 frame_shape=(frame_height, frame_width))
             print(f"掩码已保存到: {masks_dir}")
 
         if save_video:
